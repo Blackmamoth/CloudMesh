@@ -1,0 +1,5 @@
+build/
+.git/
+tmp/
+.gitignore
+README.md
