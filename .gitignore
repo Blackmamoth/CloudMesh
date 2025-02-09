@@ -29,3 +29,6 @@ bin/*
 
 # Air files
 tmp/*
+
+# OAuth Config file
+oauth.config.yml
