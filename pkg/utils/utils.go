@@ -3,9 +3,33 @@ package utils
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
+	"github.com/blackmamoth/cloudmesh/pkg/config"
+	"github.com/go-chi/jwtauth/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var AccessTokenAuth *jwtauth.JWTAuth = jwtauth.New(
+	"HS256",
+	[]byte(config.JWTConfig.ACCESS_TOKEN_SECRET),
+	nil,
+)
+
+var RefreshTokenAuth *jwtauth.JWTAuth = jwtauth.New(
+	"HS256",
+	[]byte(config.JWTConfig.REFRESH_TOKEN_SECRET),
+	nil,
+)
+
+type JWTTokenType string
+
+var (
+	ACCESS_TOKEN  JWTTokenType = "ACCESS_TOKEN"
+	REFRESH_TOKEN JWTTokenType = "REFRESH_TOKEN"
 )
 
 func SendAPIResponse(w http.ResponseWriter, status int, data any, cookies ...*http.Cookie) error {
@@ -64,15 +88,55 @@ func PingPostgresConnection(poolConfig *pgxpool.Config) error {
 	return conn.Ping(context.Background())
 }
 
-func GetNewConnectionFromPool(poolConfig *pgxpool.Config) (*pgxpool.Conn, error) {
-	connPool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+func GetNewConnectionFromPool(
+	ctx context.Context,
+	poolConfig *pgxpool.Config,
+) (*pgxpool.Conn, error) {
+	conn, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := connPool.Acquire(context.Background())
+	return conn.Acquire(ctx)
+}
+
+func WithTransaction(ctx context.Context, conn *pgxpool.Conn, fn func(pgx.Tx) error) error {
+	tx, err := conn.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return conn, nil
+	defer tx.Rollback(ctx)
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func GetAccessTokenExpirationTime() time.Time {
+	return time.Now().
+		Add(time.Hour * time.Duration(config.JWTConfig.ACCESS_TOKEN_EXPIRATION_IN_HOURS))
+}
+
+func GetRefreshTokenExpirationTime() time.Time {
+	return time.Now().
+		Add(time.Duration(config.JWTConfig.REFRESH_TOKEN_EXPIRATION_IN_DAYS) * 24 * time.Hour)
+}
+
+func SignJWTToken(userId string, tokenType JWTTokenType) (string, error) {
+	claims := map[string]interface{}{"sub": userId}
+	jwtauth.SetIssuedNow(claims)
+	switch tokenType {
+	case ACCESS_TOKEN:
+		jwtauth.SetExpiry(claims, GetAccessTokenExpirationTime())
+		_, tokenString, err := AccessTokenAuth.Encode(claims)
+		return tokenString, err
+	case REFRESH_TOKEN:
+		jwtauth.SetExpiry(claims, GetRefreshTokenExpirationTime())
+		_, tokenString, err := AccessTokenAuth.Encode(claims)
+		return tokenString, err
+	default:
+		return "", fmt.Errorf("invalid token type")
+	}
 }
