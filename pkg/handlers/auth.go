@@ -135,43 +135,20 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	accessToken, refreshToken, err := h.generateAuthTokens(userId)
+	accessTokenCookie, refreshTokenCookie, err := h.generateAuthTokenCookies(userId)
 	if err != nil {
 		utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	refreshTokenExpiration := utils.GetRefreshTokenExpirationTime()
-	http.SetCookie(w, &http.Cookie{
-		Name:     "refresh_token",
-		Value:    refreshToken,
-		Path:     "/",
-		MaxAge:   int(refreshTokenExpiration.Unix()),
-		Secure:   config.AppConfig.ENVIRONMENT == "PRODUCTION",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  refreshTokenExpiration,
-	})
-
-	accessTokenExpiration := utils.GetAccessTokenExpirationTime()
-	http.SetCookie(w, &http.Cookie{
-		Name:     "access_token",
-		Value:    accessToken,
-		Path:     "/",
-		MaxAge:   int(accessTokenExpiration.Unix()),
-		Secure:   config.AppConfig.ENVIRONMENT == "PRODUCTION",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  accessTokenExpiration,
-	})
+	http.SetCookie(w, accessTokenCookie)
+	http.SetCookie(w, refreshTokenCookie)
 
 	utils.SendAPIResponse(
 		w,
 		http.StatusOK,
 		map[string]interface{}{
-			"access_token":  accessToken,
-			"refresh_token": refreshToken,
-			"user":          user,
+			"user": user,
 		},
 	)
 }
@@ -301,17 +278,44 @@ func (h *AuthHandler) updateAccount(user goth.User, userId pgtype.UUID) error {
 	return err
 }
 
-func (h *AuthHandler) generateAuthTokens(userId pgtype.UUID) (string, string, error) {
+func (h *AuthHandler) generateAuthTokenCookies(
+	userId pgtype.UUID,
+) (*http.Cookie, *http.Cookie, error) {
 	accessToken, err := utils.SignJWTToken(userId.String(), utils.ACCESS_TOKEN)
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
 
 	refreshToken, err := utils.SignJWTToken(userId.String(), utils.REFRESH_TOKEN)
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
-	return accessToken, refreshToken, nil
+
+	accessTokenExpiration := utils.GetAccessTokenExpirationTime()
+	accessTokenCookie := &http.Cookie{
+		Name:     "access_token",
+		Value:    accessToken,
+		Path:     "/",
+		MaxAge:   int(accessTokenExpiration.Unix()),
+		Secure:   config.AppConfig.ENVIRONMENT != "DEVELOPMENT",
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  accessTokenExpiration,
+	}
+
+	refreshTokenExpiration := utils.GetRefreshTokenExpirationTime()
+	refreshTokenCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		Path:     "/",
+		MaxAge:   int(refreshTokenExpiration.Unix()),
+		Secure:   config.AppConfig.ENVIRONMENT != "DEVELOPMENT",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  refreshTokenExpiration,
+	}
+
+	return accessTokenCookie, refreshTokenCookie, nil
 }
 
 func (h *AuthHandler) errorRedirect(w http.ResponseWriter, r *http.Request, msg string, err error) {
