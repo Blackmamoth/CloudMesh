@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/blackmamoth/cloudmesh/pkg/config"
+	"github.com/blackmamoth/cloudmesh/pkg/middlewares"
 	"github.com/blackmamoth/cloudmesh/pkg/utils"
 	"github.com/blackmamoth/cloudmesh/repository"
 	"github.com/go-chi/chi/v5"
@@ -23,12 +24,17 @@ import (
 )
 
 type AuthHandler struct {
-	poolConfig *pgxpool.Config
+	authMiddleware *middlewares.AuthMiddleware
+	poolConfig     *pgxpool.Config
 }
 
-func NewAuthHandler(poolConfig *pgxpool.Config) *AuthHandler {
+func NewAuthHandler(
+	authMiddleware *middlewares.AuthMiddleware,
+	poolConfig *pgxpool.Config,
+) *AuthHandler {
 	return &AuthHandler{
-		poolConfig: poolConfig,
+		authMiddleware: authMiddleware,
+		poolConfig:     poolConfig,
 	}
 }
 
@@ -50,8 +56,20 @@ func (h *AuthHandler) RegisterRoutes() *chi.Mux {
 		),
 	)
 
+	googleProvider, err := goth.GetProvider("google")
+	if err != nil {
+		config.LOGGER.Fatal("could not access google provider", zap.Error(err))
+	}
+	googleProvider.(*google.Provider).SetAccessType("offline")
+	googleProvider.(*google.Provider).SetPrompt("consent")
+
 	r.Get("/{provider}", h.auth)
 	r.Get("/{provider}/callback", h.authCallback)
+
+	r.Group(func(r chi.Router) {
+		r.Use(h.authMiddleware.VerifyRefreshToken)
+		r.Get("/refresh", h.refreshTokens)
+	})
 
 	return r
 }
@@ -135,14 +153,11 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	accessTokenCookie, refreshTokenCookie, err := h.generateAuthTokenCookies(userId)
-	if err != nil {
+	if err := h.handleAuthTokenCookies(w, userId); err != nil {
+
 		utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
 		return
 	}
-
-	http.SetCookie(w, accessTokenCookie)
-	http.SetCookie(w, refreshTokenCookie)
 
 	utils.SendAPIResponse(
 		w,
@@ -151,6 +166,24 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 			"user": user,
 		},
 	)
+}
+
+func (h *AuthHandler) refreshTokens(w http.ResponseWriter, r *http.Request) {
+	userId := r.Context().Value(middlewares.UserKey).(pgtype.UUID)
+
+	accessToken, refreshToken, err := h.generateAuthTokens(userId)
+	if err != nil {
+		utils.SendAPIErrorResponse(
+			w,
+			http.StatusInternalServerError,
+			fmt.Errorf("could not generate tokens"),
+		)
+		return
+	}
+	utils.SetHTTPCookie(w, refreshToken, utils.REFRESH_TOKEN)
+	utils.SendAPIResponse(w, http.StatusOK, map[string]string{
+		"access_token": accessToken,
+	})
 }
 
 func (h *AuthHandler) createNewUser(user goth.User) (*repository.User, error) {
@@ -278,44 +311,50 @@ func (h *AuthHandler) updateAccount(user goth.User, userId pgtype.UUID) error {
 	return err
 }
 
-func (h *AuthHandler) generateAuthTokenCookies(
-	userId pgtype.UUID,
-) (*http.Cookie, *http.Cookie, error) {
+func (h *AuthHandler) generateAuthTokens(userId pgtype.UUID) (string, string, error) {
 	accessToken, err := utils.SignJWTToken(userId.String(), utils.ACCESS_TOKEN)
 	if err != nil {
-		return nil, nil, err
+		return "", "", err
 	}
 
 	refreshToken, err := utils.SignJWTToken(userId.String(), utils.REFRESH_TOKEN)
 	if err != nil {
-		return nil, nil, err
+		return "", "", err
+	}
+	return accessToken, refreshToken, nil
+}
+
+func (h *AuthHandler) handleAuthTokenCookies(
+	w http.ResponseWriter, userId pgtype.UUID,
+) error {
+	accessToken, refreshToken, err := h.generateAuthTokens(userId)
+	if err != nil {
+		return err
 	}
 
-	accessTokenExpiration := utils.GetAccessTokenExpirationTime()
-	accessTokenCookie := &http.Cookie{
-		Name:     "access_token",
-		Value:    accessToken,
-		Path:     "/",
-		MaxAge:   int(accessTokenExpiration.Unix()),
-		Secure:   config.AppConfig.ENVIRONMENT != "DEVELOPMENT",
-		HttpOnly: false,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  accessTokenExpiration,
+	if err := utils.SetHTTPCookie(w, accessToken, utils.ACCESS_TOKEN); err != nil {
+		return err
 	}
 
-	refreshTokenExpiration := utils.GetRefreshTokenExpirationTime()
-	refreshTokenCookie := &http.Cookie{
-		Name:     "refresh_token",
-		Value:    refreshToken,
-		Path:     "/",
-		MaxAge:   int(refreshTokenExpiration.Unix()),
-		Secure:   config.AppConfig.ENVIRONMENT != "DEVELOPMENT",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  refreshTokenExpiration,
+	if err := utils.SetHTTPCookie(w, refreshToken, utils.REFRESH_TOKEN); err != nil {
+		return nil
 	}
 
-	return accessTokenCookie, refreshTokenCookie, nil
+	return nil
+}
+
+func (h *AuthHandler) getUserDetails(userId pgtype.UUID) (*repository.User, error) {
+	conn, err := utils.GetNewConnectionFromPool(context.Background(), h.poolConfig)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Release()
+
+	queries := repository.New(conn)
+
+	user, err := queries.GetUserById(context.Background(), userId)
+
+	return &user, err
 }
 
 func (h *AuthHandler) errorRedirect(w http.ResponseWriter, r *http.Request, msg string, err error) {

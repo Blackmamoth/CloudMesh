@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addCloudStoreFile = `-- name: AddCloudStoreFile :one
+INSERT INTO cloud_store (
+  account_id, provider_id, provider_file_id, file_name, file_mime_type,
+  file_size, file_created_time, file_modified_time, file_thumbnail_link, file_extension
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
+`
+
+type AddCloudStoreFileParams struct {
+	AccountID         pgtype.UUID
+	ProviderID        string
+	ProviderFileID    string
+	FileName          string
+	FileMimeType      string
+	FileSize          int32
+	FileCreatedTime   pgtype.Text
+	FileModifiedTime  pgtype.Text
+	FileThumbnailLink pgtype.Text
+	FileExtension     pgtype.Text
+}
+
+func (q *Queries) AddCloudStoreFile(ctx context.Context, arg AddCloudStoreFileParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, addCloudStoreFile,
+		arg.AccountID,
+		arg.ProviderID,
+		arg.ProviderFileID,
+		arg.FileName,
+		arg.FileMimeType,
+		arg.FileSize,
+		arg.FileCreatedTime,
+		arg.FileModifiedTime,
+		arg.FileThumbnailLink,
+		arg.FileExtension,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createAccount = `-- name: CreateAccount :one
 INSERT INTO account (
   user_id, account_id, provider_id, access_token, refresh_token, access_token_expires_at, id_token    
@@ -108,6 +146,27 @@ func (q *Queries) GetAccountByUserId(ctx context.Context, arg GetAccountByUserId
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
+	return i, err
+}
+
+const getCloudAuthTokens = `-- name: GetCloudAuthTokens :one
+SELECT access_token, refresh_token FROM account WHERE user_id = $1 AND provider_id = $2
+`
+
+type GetCloudAuthTokensParams struct {
+	UserID     pgtype.UUID
+	ProviderID string
+}
+
+type GetCloudAuthTokensRow struct {
+	AccessToken  pgtype.Text
+	RefreshToken pgtype.Text
+}
+
+func (q *Queries) GetCloudAuthTokens(ctx context.Context, arg GetCloudAuthTokensParams) (GetCloudAuthTokensRow, error) {
+	row := q.db.QueryRow(ctx, getCloudAuthTokens, arg.UserID, arg.ProviderID)
+	var i GetCloudAuthTokensRow
+	err := row.Scan(&i.AccessToken, &i.RefreshToken)
 	return i, err
 }
 

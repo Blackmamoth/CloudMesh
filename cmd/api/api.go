@@ -81,9 +81,13 @@ func (s *APIServer) Run() error {
 func (s *APIServer) registerRoutes() *chi.Mux {
 	r := chi.NewRouter()
 
-	authHandler := handlers.NewAuthHandler(s.poolConfig)
+	authMiddleware := middlewares.NewAuthMiddleware(s.poolConfig)
+
+	authHandler := handlers.NewAuthHandler(authMiddleware, s.poolConfig)
+	cloudStoreHandler := handlers.NewCloudStoreHandler(authMiddleware, s.poolConfig)
 
 	r.Mount("/auth", authHandler.RegisterRoutes())
+	r.Mount("/cloud-store", cloudStoreHandler.RegisterRoutes())
 
 	return r
 }

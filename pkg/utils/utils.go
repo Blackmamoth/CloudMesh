@@ -11,6 +11,8 @@ import (
 	"github.com/go-chi/jwtauth/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 var AccessTokenAuth *jwtauth.JWTAuth = jwtauth.New(
@@ -134,9 +136,60 @@ func SignJWTToken(userId string, tokenType JWTTokenType) (string, error) {
 		return tokenString, err
 	case REFRESH_TOKEN:
 		jwtauth.SetExpiry(claims, GetRefreshTokenExpirationTime())
-		_, tokenString, err := AccessTokenAuth.Encode(claims)
+		_, tokenString, err := RefreshTokenAuth.Encode(claims)
 		return tokenString, err
 	default:
 		return "", fmt.Errorf("invalid token type")
 	}
+}
+
+func SetHTTPCookie(w http.ResponseWriter, token string, tokenType JWTTokenType) error {
+	switch tokenType {
+	case ACCESS_TOKEN:
+		accessTokenExpiration := GetAccessTokenExpirationTime()
+		http.SetCookie(w, &http.Cookie{
+			Name:     "access_token",
+			Value:    token,
+			Path:     "/",
+			MaxAge:   int(accessTokenExpiration.Unix()),
+			Secure:   config.AppConfig.ENVIRONMENT != "DEVELOPMENT",
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+			Expires:  accessTokenExpiration,
+		})
+		return nil
+	case REFRESH_TOKEN:
+		refreshTokenExpiration := GetRefreshTokenExpirationTime()
+		http.SetCookie(w, &http.Cookie{
+			Name:     "refresh_token",
+			Value:    token,
+			Path:     "/",
+			MaxAge:   int(refreshTokenExpiration.Unix()),
+			Secure:   config.AppConfig.ENVIRONMENT != "DEVELOPMENT",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Expires:  refreshTokenExpiration,
+		})
+		return nil
+	default:
+		return fmt.Errorf("invalid token type")
+	}
+}
+
+func GetGoogleHttpClient(accessToken, refreshToken string) *http.Client {
+	token := &oauth2.Token{AccessToken: accessToken, RefreshToken: refreshToken}
+
+	conf := &oauth2.Config{
+		ClientID:     config.OAuthConfig.GOOGLE.CLIENT_ID,
+		ClientSecret: config.OAuthConfig.GOOGLE.CLIENT_SECRET,
+		Scopes:       config.OAuthConfig.GOOGLE.SCOPES,
+		RedirectURL:  config.OAuthConfig.GOOGLE.CALLBACK_URL,
+		Endpoint:     google.Endpoint,
+	}
+
+	tokenSource := conf.TokenSource(context.Background(), token)
+
+	reusableTokenSource := oauth2.ReuseTokenSource(nil, tokenSource)
+
+	return oauth2.NewClient(context.Background(), reusableTokenSource)
 }

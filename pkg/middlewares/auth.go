@@ -134,6 +134,12 @@ func (m *AuthMiddleware) VerifyRefreshToken(next http.Handler) http.Handler {
 			return
 		}
 
+		ctx := r.Context()
+
+		ctx = context.WithValue(ctx, UserKey, userId)
+
+		r = r.WithContext(ctx)
+
 		next.ServeHTTP(w, r)
 	})
 }

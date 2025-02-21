@@ -21,6 +21,22 @@ type Account struct {
 	UpdatedAt            pgtype.Timestamp
 }
 
+type CloudStore struct {
+	ID                pgtype.UUID
+	AccountID         pgtype.UUID
+	ProviderID        string
+	ProviderFileID    string
+	FileName          string
+	FileMimeType      string
+	FileSize          int32
+	FileCreatedTime   pgtype.Text
+	FileModifiedTime  pgtype.Text
+	FileThumbnailLink pgtype.Text
+	FileExtension     pgtype.Text
+	CreatedAt         pgtype.Timestamp
+	UpdatedAt         pgtype.Timestamp
+}
+
 type User struct {
 	ID        pgtype.UUID
 	Name      string
