@@ -1,8 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"time"
@@ -15,11 +20,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
-const DROPBOX_LIST_FOLDER_API = "https://api.dropboxapi.com/2/files/list_folder"
+const (
+	DROPBOX_LIST_FOLDER_API = "https://api.dropboxapi.com/2/files/list_folder"
+	GOOGLE_OAUTH_TOKEN_API  = "https://oauth2.googleapis.com/token"
+)
 
 type CloudStoreHandler struct {
 	authMiddleware *middlewares.AuthMiddleware
@@ -44,6 +54,13 @@ type DropboxListFileResponse struct {
 	HasMore bool                     `json:"has_more"`
 }
 
+type DropboxErrrorResponse struct {
+	Error struct {
+		Tag string `json:".tag"`
+	}
+	ErrorSummary string `json:"error_summary"`
+}
+
 type DropboxListFileEntries struct {
 	Tag            string    `json:".tag"`
 	Name           string    `json:"name"`
@@ -55,6 +72,12 @@ type DropboxListFileEntries struct {
 	Rev            string    `json:"rev,omitempty"`
 	Size           int64     `json:"size,omitempty"`
 	IsDownloadable bool      `json:"is_downloadable,omitempty"`
+}
+
+type GoogleOAuthRefreshResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	IDToken     string `json:"id_token"`
 }
 
 func NewCloudStoreHandler(
@@ -89,45 +112,63 @@ func (h *CloudStoreHandler) syncFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userId := r.Context().Value(middlewares.UserKey).(pgtype.UUID)
-	accessToken, refreshToken, err := h.getCloudAuthTokens(userId, provider)
+	conn, err := utils.GetNewConnectionFromPool(context.Background(), h.poolConfig)
 	if err != nil {
+		config.LOGGER.Error(
+			"an error occured while getting new connection from pool",
+			zap.Error(err),
+		)
+		utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer conn.Release()
+
+	userId := r.Context().Value(middlewares.UserKey).(pgtype.UUID)
+	accessToken, refreshToken, err := getCloudAuthTokens(conn, userId, provider)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			config.LOGGER.Error("attempt to sync unlinked account", zap.Error(err))
+			utils.SendAPIErrorResponse(
+				w,
+				http.StatusUnprocessableEntity,
+				fmt.Errorf(
+					"could not fetch tokens for %s, please make sure you've linked a %s account",
+					provider, provider,
+				),
+			)
+			return
+		}
 		utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	var insertedIdList []*pgtype.UUID
+	var count int
 
 	switch provider {
 	case "google":
-		insertedIdList, err = h.syncGoogleDriveFiles(accessToken, refreshToken, userId)
+		count, err = syncGoogleDriveFiles(conn, accessToken, refreshToken, userId)
 		if err != nil {
 			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
 			return
 		}
-		// case "dropbox":
-		// 	insertedIdList, err = h.syncDropboxFiles(accessToken, userId)
-		// 	if err != nil {
-		// 		utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
-		// 		return
-		// 	}
+	case "dropbox":
+		count, err = syncDropboxFiles(conn, accessToken, userId)
+		if err != nil {
+			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 
 	utils.SendAPIResponse(w, http.StatusOK, map[string]interface{}{
-		"list": insertedIdList,
+		"message": fmt.Sprintf("Synched %d files", count),
 	})
 }
 
-func (h *CloudStoreHandler) getCloudAuthTokens(
+func getCloudAuthTokens(
+	conn *pgxpool.Conn,
 	userId pgtype.UUID,
 	provider string,
 ) (string, string, error) {
-	conn, err := utils.GetNewConnectionFromPool(context.Background(), h.poolConfig)
-	if err != nil {
-		return "", "", err
-	}
-	defer conn.Release()
-
 	queries := repository.New(conn)
 
 	authTokens, err := queries.GetCloudAuthTokens(
@@ -138,34 +179,48 @@ func (h *CloudStoreHandler) getCloudAuthTokens(
 		},
 	)
 	if err != nil {
+		config.LOGGER.Error("an error occured while fetching auth tokens from DB", zap.Error(err))
 		return "", "", err
 	}
 	return authTokens.AccessToken.String, authTokens.RefreshToken.String, nil
 }
 
-func (h *CloudStoreHandler) syncGoogleDriveFiles(
+func syncGoogleDriveFiles(conn *pgxpool.Conn,
 	accessToken, refreshToken string, userId pgtype.UUID,
-) ([]*pgtype.UUID, error) {
+) (int, error) {
 	client := utils.GetGoogleHttpClient(accessToken, refreshToken)
+
+	count := 0
 
 	driveService, err := drive.NewService(context.Background(), option.WithHTTPClient(client))
 	if err != nil {
-		return nil, err
+		config.LOGGER.Error("an error occured while initializing drive service")
+		return count, err
 	}
-
-	list := []*pgtype.UUID{}
 
 	pageToken := ""
 
-	conn, err := utils.GetNewConnectionFromPool(context.Background(), h.poolConfig)
+	accountId, err := getAccountId(conn, userId, "google")
 	if err != nil {
-		return nil, err
+		return count, err
 	}
-	defer conn.Release()
 
-	accountId, err := h.getAccountId(conn, userId, "google")
+	lastSyncTime, err := getLatestSynchedFile(conn, accountId, "google")
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, sql.ErrNoRows) {
+			config.LOGGER.Error(
+				"could not fetch timestamp of the latest sync",
+				zap.String("provider", "google"),
+				zap.Error(err),
+			)
+			return count, err
+		}
+	}
+
+	query := ""
+
+	if lastSyncTime.Valid {
+		query = fmt.Sprintf("modifiedTime > '%s'", lastSyncTime.Time.Format(time.RFC3339))
 	}
 
 	for {
@@ -173,9 +228,45 @@ func (h *CloudStoreHandler) syncGoogleDriveFiles(
 			Fields("files(id, name, size, mimeType, createdTime, modifiedTime, thumbnailLink, fullFileExtension)").
 			PageToken(pageToken).
 			PageSize(1000).
+			Q(query).
 			Do()
 		if err != nil {
-			return nil, err
+			if gErr, ok := err.(*googleapi.Error); ok {
+				if gErr.Code == http.StatusUnauthorized {
+					accessToken, refreshToken, err = getNewOAuthTokensGoogle(
+						conn,
+						userId,
+						accountId,
+						refreshToken,
+					)
+					if err != nil {
+						config.LOGGER.Error(
+							"an error occured while fetching google drive filed",
+							zap.Error(err),
+						)
+						return count, err
+					}
+
+					client = utils.GetGoogleHttpClient(accessToken, refreshToken)
+					driveService, err = drive.NewService(
+						context.Background(),
+						option.WithHTTPClient(client),
+					)
+					if err != nil {
+						config.LOGGER.Error(
+							"an error occured while initializing drive service with renewed tokens",
+							zap.Error(err),
+						)
+						return count, err
+					}
+
+					continue
+
+				}
+				return count, err
+			} else {
+				return count, err
+			}
 		}
 		for _, file := range fileList.Files {
 			fileStruct := &CloudStoreFile{
@@ -188,17 +279,16 @@ func (h *CloudStoreHandler) syncGoogleDriveFiles(
 				ThumbnailLink: file.ThumbnailLink,
 				Extension:     file.FullFileExtension,
 			}
-			insertedId, err := h.addFilesToCloudStore(
+			_, err := addFilesToCloudStore(
 				conn,
 				fileStruct,
-				userId,
 				accountId,
 				"google",
 			)
 			if err != nil {
-				return nil, err
+				return count, err
 			}
-			list = append(list, &insertedId)
+			count += 1
 		}
 
 		if fileList.NextPageToken == "" {
@@ -207,76 +297,116 @@ func (h *CloudStoreHandler) syncGoogleDriveFiles(
 
 		pageToken = fileList.NextPageToken
 	}
-	return list, nil
+	return count, nil
 }
 
-// func (h *CloudStoreHandler) syncDropboxFiles(
-// 	accessToken string,
-// 	userId pgtype.UUID,
-// ) ([]*pgtype.UUID, error) {
-// 	dropboxApiUrl := DROPBOX_LIST_FOLDER_API
-// 	requestBody := []byte(`{"path": "", "recursive": true}`)
-//
-// 	httpClient := http.Client{}
-//
-// 	for {
-// 		req, err := http.NewRequest(http.MethodPost, dropboxApiUrl, bytes.NewReader(requestBody))
-// 		if err != nil {
-// 			return nil, err
-// 		}
-//
-// 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
-// 		req.Header.Set("Content-Type", "application/json")
-//
-// 		resp, err := httpClient.Do(req)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-//
-// 		defer resp.Body.Close()
-//
-// body, err := io.ReadAll(resp.Body)
-// if err != nil {
-// 	return nil, err
-// }
-//
-// if resp.StatusCode != http.StatusOK {
-// 	return nil, fmt.Errorf("status: %d", resp.StatusCode)
-// }
-//
-// var response DropboxListFileResponse
-//
-// err = json.Unmarshal(body, &response)
-// if err != nil {
-// 	return nil, err
-// }
-//
-// response.Entries = func(entries []DropboxListFileEntries) []DropboxListFileEntries {
-// 	var filteredEntries []DropboxListFileEntries
-// 	for _, entry := range entries {
-// 		if entry.Tag == "file" {
-// 			filteredEntries = append(filteredEntries, entry)
-// 		}
-// 			}
-// 			return filteredEntries
-// 		}(response.Entries)
-//
-// 		if response.Cursor == "" {
-// 			break
-// 		}
-//
-// 		if !strings.Contains(dropboxApiUrl, "continue") {
-// 			dropboxApiUrl = fmt.Sprintf("%s/continue", dropboxApiUrl)
-// 		}
-//
-// 		requestBody = []byte(fmt.Sprintf("\"cursor\": \"%s\"", response.Cursor))
-//
-// 	}
-//
-// 	return nil, nil
-// }
+func getDropFolderList(
+	accessToken, cursor string,
+) (*DropboxListFileResponse, error) {
+	dropboxApiUrl := DROPBOX_LIST_FOLDER_API
+	reqBody := []byte(`{"path": "", "recursive": true}`)
 
-func (h *CloudStoreHandler) getAccountId(
+	if cursor != "" {
+		dropboxApiUrl = fmt.Sprintf("%s/continue", DROPBOX_LIST_FOLDER_API)
+		reqBody = []byte(fmt.Sprintf("{\"cursor\": \"%s\"}", cursor))
+	}
+
+	httpClient := http.Client{}
+
+	req, err := http.NewRequest(http.MethodPost, dropboxApiUrl, bytes.NewReader(reqBody))
+	if err != nil {
+		config.LOGGER.Error("an error occured while generating http request", zap.Error(err))
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := httpClient.Do(req)
+	if err != nil {
+		config.LOGGER.Error("http request to dropbox failed", zap.Error(err))
+		return nil, err
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		config.LOGGER.Error("could not read response body", zap.Error(err))
+		return nil, err
+	}
+
+	if res.StatusCode != http.StatusOK {
+		var dropboxErrorResponse DropboxErrrorResponse
+		err = json.Unmarshal(body, &dropboxErrorResponse)
+		if err != nil {
+			config.LOGGER.Error("could not unmarshal dropbox error response", zap.Error(err))
+			return nil, err
+		}
+		return nil, fmt.Errorf("%s", dropboxErrorResponse.ErrorSummary)
+	}
+
+	var dropboxResponse DropboxListFileResponse
+
+	err = json.Unmarshal(body, &dropboxResponse)
+	return &dropboxResponse, err
+}
+
+func syncDropboxFiles(
+	conn *pgxpool.Conn,
+	accessToken string,
+	userId pgtype.UUID,
+) (int, error) {
+	accountId, err := getAccountId(conn, userId, "dropbox")
+	if err != nil {
+		return 0, err
+	}
+
+	cursor := ""
+
+	count := 0
+
+	for {
+		dropboxResponse, err := getDropFolderList(accessToken, cursor)
+		if err != nil {
+			return count, err
+		}
+
+		if !dropboxResponse.HasMore {
+			break
+		}
+
+		dropboxResponse.Entries = func(entries []DropboxListFileEntries) []DropboxListFileEntries {
+			var filteredEntries []DropboxListFileEntries
+			for _, entry := range entries {
+				if entry.Tag == "file" {
+					filteredEntries = append(filteredEntries, entry)
+				}
+			}
+			return filteredEntries
+		}(dropboxResponse.Entries)
+
+		for _, entry := range dropboxResponse.Entries {
+			addFilesToCloudStore(conn, &CloudStoreFile{
+				ProviderId:    "dropbox",
+				MimeType:      "",
+				Name:          entry.Name,
+				Size:          entry.Size,
+				CreatedTime:   "",
+				ModifiedTime:  entry.ClientModified.String(),
+				ThumbnailLink: "",
+				Extension:     "",
+			}, accountId, "dropbox")
+			count += 1
+		}
+
+		cursor = dropboxResponse.Cursor
+	}
+
+	return count, nil
+}
+
+func getAccountId(
 	conn *pgxpool.Conn,
 	userId pgtype.UUID,
 	provider string,
@@ -290,15 +420,33 @@ func (h *CloudStoreHandler) getAccountId(
 		},
 	)
 	if err != nil {
+		config.LOGGER.Error("could not fetch account id", zap.Error(err))
 		return pgtype.UUID{Valid: false}, err
 	}
 	return account.ID, nil
 }
 
-func (h *CloudStoreHandler) addFilesToCloudStore(
+func getLatestSynchedFile(
+	conn *pgxpool.Conn,
+	accountId pgtype.UUID,
+	provider string,
+) (pgtype.Timestamp, error) {
+	queries := repository.New(conn)
+
+	lastSyncTime, err := queries.GetLatestSynchedFile(
+		context.Background(),
+		repository.GetLatestSynchedFileParams{
+			ProviderID: provider,
+			AccountID:  accountId,
+		},
+	)
+	return lastSyncTime, err
+}
+
+func addFilesToCloudStore(
 	conn *pgxpool.Conn,
 	file *CloudStoreFile,
-	userId, accountId pgtype.UUID,
+	accountId pgtype.UUID,
 	provider string,
 ) (pgtype.UUID, error) {
 	var id pgtype.UUID
@@ -336,6 +484,10 @@ func (h *CloudStoreHandler) addFilesToCloudStore(
 			},
 		)
 		if err != nil {
+			config.LOGGER.Error(
+				"sql transaction failed, could not add file to cloud_store table",
+				zap.Error(err),
+			)
 			return err
 		}
 
@@ -348,4 +500,94 @@ func (h *CloudStoreHandler) addFilesToCloudStore(
 	}
 
 	return id, nil
+}
+
+func getNewOAuthTokensGoogle(
+	conn *pgxpool.Conn,
+	userId, accountId pgtype.UUID,
+	refreshToken string,
+) (string, string, error) {
+	reqUrl := fmt.Sprintf(
+		"%s?grant_type=refresh_token&client_id=%s&client_secret=%s&refresh_token=%s",
+		GOOGLE_OAUTH_TOKEN_API,
+		config.OAuthConfig.GOOGLE.CLIENT_ID,
+		config.OAuthConfig.GOOGLE.CLIENT_SECRET,
+		refreshToken,
+	)
+
+	res, err := http.Post(reqUrl, "application/json", nil)
+	if err != nil {
+		config.LOGGER.Error(
+			"http request for renewing auth tokens failed",
+			zap.String("provider", "google"),
+		)
+		return "", "", err
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		config.LOGGER.Error("could not read response body", zap.Error(err))
+		return "", "", err
+	}
+
+	defer res.Body.Close()
+
+	var authResponse GoogleOAuthRefreshResponse
+
+	if err := json.Unmarshal(body, &authResponse); err != nil {
+		config.LOGGER.Error("could not unmarshal response into struct", zap.Error(err))
+		return "", "", err
+	}
+
+	newAccessToken, refreshToken, err := updateAuthTokens(authResponse, conn, userId, accountId)
+	if err != nil {
+		return "", "", err
+	}
+
+	return newAccessToken, refreshToken, nil
+}
+
+func updateAuthTokens(
+	authResponse GoogleOAuthRefreshResponse,
+	conn *pgxpool.Conn,
+	userId, accountId pgtype.UUID,
+) (string, string, error) {
+	updateOAuthTokensParams := repository.UpdateOAuthTokensParams{
+		AccessToken: pgtype.Text{
+			String: authResponse.AccessToken,
+			Valid:  authResponse.AccessToken != "",
+		},
+		IDToken: pgtype.Text{
+			String: authResponse.IDToken,
+			Valid:  authResponse.IDToken != "",
+		},
+		UserID: userId,
+		ID:     accountId,
+	}
+
+	var accessToken, refreshToken string
+
+	err := utils.WithTransaction(context.Background(), conn, func(tx pgx.Tx) error {
+		queries := repository.New(conn)
+		qtx := queries.WithTx(tx)
+
+		tokens, err := qtx.UpdateOAuthTokens(context.Background(), updateOAuthTokensParams)
+		if err != nil {
+			config.LOGGER.Error(
+				"sql transaction failed, could not update oauth tokens",
+				zap.Error(err),
+			)
+			return err
+		}
+
+		accessToken = tokens.AccessToken.String
+		refreshToken = tokens.RefreshToken.String
+
+		return nil
+	})
+	if err != nil {
+		return "", "", nil
+	}
+
+	return accessToken, refreshToken, nil
 }

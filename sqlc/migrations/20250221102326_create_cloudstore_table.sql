@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS cloud_store(
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 
   PRIMARY KEY (id),
+  UNIQUE (provider_file_id),
   FOREIGN KEY (account_id) REFERENCES account(id)
 );
 -- +goose StatementEnd
