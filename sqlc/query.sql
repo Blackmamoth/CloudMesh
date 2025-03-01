@@ -75,6 +75,5 @@ AND (
     @search::TEXT IS NULL 
     OR @search::TEXT = '' 
     OR store.file_name ILIKE '%' || @search::TEXT || '%'
-    OR store.file_mime_type ILIKE '%s' || @search::TEXT || '%'
     OR store.file_extension ILIKE '%s' || @search::TEXT || '%'
-);
+) ORDER BY file_name ASC LIMIT @limit_by OFFSET @offset_of;

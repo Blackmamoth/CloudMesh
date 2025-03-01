@@ -32,6 +32,8 @@ const (
 	DROPBOX_LIST_FOLDER_API  = "https://api.dropboxapi.com/2/files/list_folder"
 	DROPBOX_AUTH_REFRESH_API = "https://api.dropbox.com/oauth2/token"
 	GOOGLE_OAUTH_TOKEN_API   = "https://oauth2.googleapis.com/token"
+	DEFAULT_QUERY_LIMIT      = 25
+	DEFAULT_QUERY_OFFSET     = 0
 )
 
 type CloudStoreHandler struct {
@@ -67,6 +69,8 @@ type DropboxErrrorResponse struct {
 type GetSynchedFilesValidation struct {
 	Provider string `validate:"omitempty,oneof=google dropbox" alias:"provider" json:"provider"`
 	Search   string `validate:"omitempty"                      alias:"search"   json:"search"`
+	Limit    int    `validate:"omitempty"                      alias:"limit"    json:"limit"`
+	Offset   int    `validate:"omitempty"                      alias:"offset"   json:"offset"`
 }
 
 type DropboxListFileEntries struct {
@@ -213,7 +217,15 @@ func (h *CloudStoreHandler) getSynchedFiles(w http.ResponseWriter, r *http.Reque
 
 	userId := r.Context().Value(middlewares.UserKey).(pgtype.UUID)
 
-	files, err := getSynchedFiles(conn, userId, payload.Provider, payload.Search)
+	if payload.Limit == 0 {
+		payload.Limit = DEFAULT_QUERY_LIMIT
+	}
+
+	if payload.Offset < 0 {
+		payload.Offset = DEFAULT_QUERY_OFFSET
+	}
+
+	files, err := getSynchedFiles(conn, userId, payload)
 	if err != nil {
 		config.LOGGER.Error("could query files from the db", zap.Error(err))
 		utils.SendAPIErrorResponse(
@@ -740,13 +752,15 @@ func updateAuthTokens(
 func getSynchedFiles(
 	conn *pgxpool.Conn,
 	userId pgtype.UUID,
-	provider, search string,
+	payload GetSynchedFilesValidation,
 ) ([]repository.GetSynchedFilesRow, error) {
 	queries := repository.New(conn)
 
 	return queries.GetSynchedFiles(context.Background(), repository.GetSynchedFilesParams{
 		UserID:   userId,
-		Provider: provider,
-		Search:   search,
+		Provider: payload.Provider,
+		Search:   payload.Search,
+		LimitBy:  int32(payload.Limit),
+		OffsetOf: int32(payload.Offset),
 	})
 }

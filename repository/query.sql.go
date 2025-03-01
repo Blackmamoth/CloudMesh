@@ -219,15 +219,16 @@ AND (
     $3::TEXT IS NULL 
     OR $3::TEXT = '' 
     OR store.file_name ILIKE '%' || $3::TEXT || '%'
-    OR store.file_mime_type ILIKE '%s' || $3::TEXT || '%'
     OR store.file_extension ILIKE '%s' || $3::TEXT || '%'
-)
+) ORDER BY file_name ASC LIMIT $5 OFFSET $4
 `
 
 type GetSynchedFilesParams struct {
 	UserID   pgtype.UUID
 	Provider string
 	Search   string
+	OffsetOf int32
+	LimitBy  int32
 }
 
 type GetSynchedFilesRow struct {
@@ -240,7 +241,13 @@ type GetSynchedFilesRow struct {
 }
 
 func (q *Queries) GetSynchedFiles(ctx context.Context, arg GetSynchedFilesParams) ([]GetSynchedFilesRow, error) {
-	rows, err := q.db.Query(ctx, getSynchedFiles, arg.UserID, arg.Provider, arg.Search)
+	rows, err := q.db.Query(ctx, getSynchedFiles,
+		arg.UserID,
+		arg.Provider,
+		arg.Search,
+		arg.OffsetOf,
+		arg.LimitBy,
+	)
 	if err != nil {
 		return nil, err
 	}
