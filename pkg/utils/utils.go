@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/blackmamoth/cloudmesh/pkg/config"
 	"github.com/go-chi/jwtauth/v5"
+	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
+
+var Validate = validator.New()
 
 var AccessTokenAuth *jwtauth.JWTAuth = jwtauth.New(
 	"HS256",
@@ -75,6 +79,61 @@ func generateAPIResponseBody(status int, data any) map[string]any {
 		return map[string]any{"status": status, "error": data}
 	}
 	return map[string]any{"status": status, "data": data}
+}
+
+func ParseJSON(r *http.Request, v interface{}) error {
+	if r.Body == nil {
+		return fmt.Errorf("request body should not be empty")
+	}
+	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func generateMsgForField(fe validator.FieldError, v interface{}) (string, string) {
+	t := reflect.TypeOf(v)
+
+	field, _ := t.FieldByName(fe.StructField())
+
+	aliasTag := field.Tag.Get("alias")
+
+	switch fe.Tag() {
+	case "required":
+		return aliasTag, fmt.Sprintf("\"%s\" is required", aliasTag)
+	case "email":
+		return aliasTag, fmt.Sprintf("\"%s\" must be a valid email address", aliasTag)
+	case "min":
+		return aliasTag, fmt.Sprintf(
+			"\"%s\" should contain at least %s characters",
+			aliasTag,
+			fe.Param(),
+		)
+	case "max":
+		return aliasTag, fmt.Sprintf(
+			"\"%s\" should contain at most %s characters",
+			aliasTag,
+			fe.Param(),
+		)
+	case "dive":
+		return aliasTag, fmt.Sprintf("\"%s\" should be in an array", aliasTag)
+	case "oneof":
+		return aliasTag, fmt.Sprintf("\"%s\" should be one of [%s]", aliasTag, fe.Param())
+	case "alphanum":
+		return aliasTag, fmt.Sprintf("\"%s\" should be alpha numerical", aliasTag)
+	case "lowercase":
+		return aliasTag, fmt.Sprintf("\"%s\" should be all lower case", aliasTag)
+	case "uuid":
+		return aliasTag, fmt.Sprintf("\"%s\" should be a valid UUID", aliasTag)
+	}
+
+	return fe.Field(), fe.Error()
+}
+
+func GenerateValidationErrorObject(ve validator.ValidationErrors, v interface{}) map[string]string {
+	errs := map[string]string{}
+	for _, fe := range ve {
+		key, value := generateMsgForField(fe, v)
+		errs[key] = value
+	}
+	return errs
 }
 
 func PingPostgresConnection(poolConfig *pgxpool.Config) error {

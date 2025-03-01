@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/blackmamoth/cloudmesh/pkg/utils"
 	"github.com/blackmamoth/cloudmesh/repository"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,8 +29,9 @@ import (
 )
 
 const (
-	DROPBOX_LIST_FOLDER_API = "https://api.dropboxapi.com/2/files/list_folder"
-	GOOGLE_OAUTH_TOKEN_API  = "https://oauth2.googleapis.com/token"
+	DROPBOX_LIST_FOLDER_API  = "https://api.dropboxapi.com/2/files/list_folder"
+	DROPBOX_AUTH_REFRESH_API = "https://api.dropbox.com/oauth2/token"
+	GOOGLE_OAUTH_TOKEN_API   = "https://oauth2.googleapis.com/token"
 )
 
 type CloudStoreHandler struct {
@@ -61,6 +64,11 @@ type DropboxErrrorResponse struct {
 	ErrorSummary string `json:"error_summary"`
 }
 
+type GetSynchedFilesValidation struct {
+	Provider string `validate:"omitempty,oneof=google dropbox" alias:"provider" json:"provider"`
+	Search   string `validate:"omitempty"                      alias:"search"   json:"search"`
+}
+
 type DropboxListFileEntries struct {
 	Tag            string    `json:".tag"`
 	Name           string    `json:"name"`
@@ -80,6 +88,12 @@ type GoogleOAuthRefreshResponse struct {
 	IDToken     string `json:"id_token"`
 }
 
+type DropboxAuthRefreshResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+}
+
 func NewCloudStoreHandler(
 	authMiddleware *middlewares.AuthMiddleware,
 	poolConfig *pgxpool.Config,
@@ -96,6 +110,7 @@ func (h *CloudStoreHandler) RegisterRoutes() *chi.Mux {
 	r.Use(h.authMiddleware.VerifyAccessToken)
 
 	r.Get("/sync/{provider}", h.syncFiles)
+	r.Post("/get-files", h.getSynchedFiles)
 
 	return r
 }
@@ -152,7 +167,7 @@ func (h *CloudStoreHandler) syncFiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "dropbox":
-		count, err = syncDropboxFiles(conn, accessToken, userId)
+		count, err = syncDropboxFiles(conn, accessToken, refreshToken, userId)
 		if err != nil {
 			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
 			return
@@ -162,6 +177,59 @@ func (h *CloudStoreHandler) syncFiles(w http.ResponseWriter, r *http.Request) {
 	utils.SendAPIResponse(w, http.StatusOK, map[string]interface{}{
 		"message": fmt.Sprintf("Synched %d files", count),
 	})
+}
+
+func (h *CloudStoreHandler) getSynchedFiles(w http.ResponseWriter, r *http.Request) {
+	var payload GetSynchedFilesValidation
+
+	defer r.Body.Close()
+
+	if err := utils.ParseJSON(r, &payload); err != nil && !errors.Is(err, io.EOF) {
+		config.LOGGER.Error("could not parse json payload", zap.Error(err))
+		utils.SendAPIErrorResponse(
+			w,
+			http.StatusUnprocessableEntity,
+			"please provide all the required fields",
+		)
+		return
+	}
+
+	if err := utils.Validate.Struct(payload); err != nil {
+		errs := utils.GenerateValidationErrorObject(err.(validator.ValidationErrors), payload)
+		utils.SendAPIErrorResponse(w, http.StatusUnprocessableEntity, errs)
+		return
+	}
+
+	conn, err := utils.GetNewConnectionFromPool(context.Background(), h.poolConfig)
+	if err != nil {
+		config.LOGGER.Error("could not get new connection from pool", zap.Error(err))
+		utils.SendAPIErrorResponse(
+			w,
+			http.StatusInternalServerError,
+			fmt.Errorf("could not process your request, please try again later"),
+		)
+		return
+	}
+
+	userId := r.Context().Value(middlewares.UserKey).(pgtype.UUID)
+
+	files, err := getSynchedFiles(conn, userId, payload.Provider, payload.Search)
+	if err != nil {
+		config.LOGGER.Error("could query files from the db", zap.Error(err))
+		utils.SendAPIErrorResponse(
+			w,
+			http.StatusInternalServerError,
+			fmt.Errorf("an error occured while fetching your files"),
+		)
+		return
+	}
+
+	data := map[string]interface{}{
+		"files":   files,
+		"message": "Successfully fetched files.",
+	}
+
+	utils.SendAPIResponse(w, http.StatusOK, data)
 }
 
 func getCloudAuthTokens(
@@ -301,7 +369,9 @@ func syncGoogleDriveFiles(conn *pgxpool.Conn,
 }
 
 func getDropFolderList(
-	accessToken, cursor string,
+	conn *pgxpool.Conn,
+	accessToken, refreshToken, cursor string,
+	userId, accountId pgtype.UUID,
 ) (*DropboxListFileResponse, error) {
 	dropboxApiUrl := DROPBOX_LIST_FOLDER_API
 	reqBody := []byte(`{"path": "", "recursive": true}`)
@@ -313,48 +383,62 @@ func getDropFolderList(
 
 	httpClient := http.Client{}
 
-	req, err := http.NewRequest(http.MethodPost, dropboxApiUrl, bytes.NewReader(reqBody))
-	if err != nil {
-		config.LOGGER.Error("an error occured while generating http request", zap.Error(err))
-		return nil, err
-	}
+	for retry := 0; retry < 2; retry++ {
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
-	req.Header.Set("Content-Type", "application/json")
-
-	res, err := httpClient.Do(req)
-	if err != nil {
-		config.LOGGER.Error("http request to dropbox failed", zap.Error(err))
-		return nil, err
-	}
-
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		config.LOGGER.Error("could not read response body", zap.Error(err))
-		return nil, err
-	}
-
-	if res.StatusCode != http.StatusOK {
-		var dropboxErrorResponse DropboxErrrorResponse
-		err = json.Unmarshal(body, &dropboxErrorResponse)
+		req, err := http.NewRequest(http.MethodPost, dropboxApiUrl, bytes.NewReader(reqBody))
 		if err != nil {
-			config.LOGGER.Error("could not unmarshal dropbox error response", zap.Error(err))
+			config.LOGGER.Error("an error occured while generating http request", zap.Error(err))
 			return nil, err
 		}
-		return nil, fmt.Errorf("%s", dropboxErrorResponse.ErrorSummary)
+
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+
+		res, err := httpClient.Do(req)
+		if err != nil {
+			config.LOGGER.Error("http request to dropbox failed", zap.Error(err))
+			return nil, err
+		}
+
+		defer res.Body.Close()
+
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			config.LOGGER.Error("could not read response body", zap.Error(err))
+			return nil, err
+		}
+
+		if res.StatusCode == http.StatusUnauthorized {
+			newAccessToken, err := getNewOAuthTokensDropbox(conn, userId, accountId, refreshToken)
+			if err != nil {
+				config.LOGGER.Error("failed to renew token", zap.Error(err))
+				return nil, err
+			}
+			accessToken = newAccessToken
+			continue
+		}
+
+		if res.StatusCode != http.StatusOK {
+			var dropboxErrorResponse DropboxErrrorResponse
+			err = json.Unmarshal(body, &dropboxErrorResponse)
+			if err != nil {
+				config.LOGGER.Error("could not unmarshal dropbox error response", zap.Error(err))
+				return nil, err
+			}
+			return nil, fmt.Errorf("%s", dropboxErrorResponse.ErrorSummary)
+		}
+
+		var dropboxResponse DropboxListFileResponse
+
+		err = json.Unmarshal(body, &dropboxResponse)
+		return &dropboxResponse, err
 	}
-
-	var dropboxResponse DropboxListFileResponse
-
-	err = json.Unmarshal(body, &dropboxResponse)
-	return &dropboxResponse, err
+	return nil, fmt.Errorf("failed after retrying request")
 }
 
 func syncDropboxFiles(
 	conn *pgxpool.Conn,
-	accessToken string,
+	accessToken, refreshToken string,
 	userId pgtype.UUID,
 ) (int, error) {
 	accountId, err := getAccountId(conn, userId, "dropbox")
@@ -367,7 +451,14 @@ func syncDropboxFiles(
 	count := 0
 
 	for {
-		dropboxResponse, err := getDropFolderList(accessToken, cursor)
+		dropboxResponse, err := getDropFolderList(
+			conn,
+			accessToken,
+			refreshToken,
+			cursor,
+			userId,
+			accountId,
+		)
 		if err != nil {
 			return count, err
 		}
@@ -387,7 +478,7 @@ func syncDropboxFiles(
 		}(dropboxResponse.Entries)
 
 		for _, entry := range dropboxResponse.Entries {
-			addFilesToCloudStore(conn, &CloudStoreFile{
+			_, err := addFilesToCloudStore(conn, &CloudStoreFile{
 				ProviderId:    "dropbox",
 				MimeType:      "",
 				Name:          entry.Name,
@@ -397,6 +488,9 @@ func syncDropboxFiles(
 				ThumbnailLink: "",
 				Extension:     "",
 			}, accountId, "dropbox")
+			if err != nil {
+				return count, err
+			}
 			count += 1
 		}
 
@@ -539,7 +633,13 @@ func getNewOAuthTokensGoogle(
 		return "", "", err
 	}
 
-	newAccessToken, refreshToken, err := updateAuthTokens(authResponse, conn, userId, accountId)
+	newAccessToken, refreshToken, err := updateAuthTokens(
+		authResponse.AccessToken,
+		authResponse.IDToken,
+		conn,
+		userId,
+		accountId,
+	)
 	if err != nil {
 		return "", "", err
 	}
@@ -547,19 +647,64 @@ func getNewOAuthTokensGoogle(
 	return newAccessToken, refreshToken, nil
 }
 
+func getNewOAuthTokensDropbox(
+	conn *pgxpool.Conn,
+	userId, accountId pgtype.UUID,
+	refreshToken string,
+) (string, error) {
+	data := url.Values{}
+	data.Add("grant_type", "refresh_token")
+	data.Add("refresh_token", refreshToken)
+	data.Add("client_id", config.OAuthConfig.DROPBOX.CLIENT_ID)
+	data.Add("client_secret", config.OAuthConfig.DROPBOX.CLIENT_SECRET)
+
+	res, err := http.Post(
+		DROPBOX_AUTH_REFRESH_API,
+		"application/x-www-form-urlencoded",
+		bytes.NewBufferString(data.Encode()),
+	)
+	if err != nil {
+		config.LOGGER.Error("dropbox refresh request failed", zap.Error(err))
+		return "", err
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		config.LOGGER.Error("could not read response body", zap.Error(err))
+		return "", err
+	}
+
+	var response DropboxAuhtTokenResponse
+
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		config.LOGGER.Error("could not unmarshal json response", zap.Error(err))
+		return "", err
+	}
+
+	accessToken, _, err := updateAuthTokens(response.AccessToken, "", conn, userId, accountId)
+	if err != nil {
+		return "", err
+	}
+
+	return accessToken, nil
+}
+
 func updateAuthTokens(
-	authResponse GoogleOAuthRefreshResponse,
+	newAccessToken, newIdToken string,
 	conn *pgxpool.Conn,
 	userId, accountId pgtype.UUID,
 ) (string, string, error) {
 	updateOAuthTokensParams := repository.UpdateOAuthTokensParams{
 		AccessToken: pgtype.Text{
-			String: authResponse.AccessToken,
-			Valid:  authResponse.AccessToken != "",
+			String: newAccessToken,
+			Valid:  newAccessToken != "",
 		},
 		IDToken: pgtype.Text{
-			String: authResponse.IDToken,
-			Valid:  authResponse.IDToken != "",
+			String: newIdToken,
+			Valid:  newIdToken != "",
 		},
 		UserID: userId,
 		ID:     accountId,
@@ -590,4 +735,18 @@ func updateAuthTokens(
 	}
 
 	return accessToken, refreshToken, nil
+}
+
+func getSynchedFiles(
+	conn *pgxpool.Conn,
+	userId pgtype.UUID,
+	provider, search string,
+) ([]repository.GetSynchedFilesRow, error) {
+	queries := repository.New(conn)
+
+	return queries.GetSynchedFiles(context.Background(), repository.GetSynchedFilesParams{
+		UserID:   userId,
+		Provider: provider,
+		Search:   search,
+	})
 }

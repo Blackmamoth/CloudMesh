@@ -14,8 +14,8 @@ import (
 const addCloudStoreFile = `-- name: AddCloudStoreFile :one
 INSERT INTO cloud_store (
   account_id, provider_id, provider_file_id, file_name, file_mime_type,
-  file_size, file_created_time, file_modified_time, file_thumbnail_link, file_extension
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (provider_file_id)
+  file_size, file_created_time, file_modified_time, file_thumbnail_link, file_extension) 
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (provider_file_id)
 DO UPDATE SET
   file_name = $4,
   file_mime_type = $5,
@@ -194,6 +194,76 @@ func (q *Queries) GetLatestSynchedFile(ctx context.Context, arg GetLatestSynched
 	var updated_at pgtype.Timestamp
 	err := row.Scan(&updated_at)
 	return updated_at, err
+}
+
+const getSynchedFiles = `-- name: GetSynchedFiles :many
+SELECT 
+    store.file_name AS file_name, 
+    store.file_size AS file_size, 
+    store.provider_id AS provider,
+    store.file_created_time as file_created_time, 
+    store.file_modified_time as file_modified_time, 
+    store.file_thumbnail_link as file_thumbnail_link 
+FROM 
+    cloud_store store
+JOIN 
+    account ON store.account_id = account.id
+WHERE 
+    account.user_id = $1
+AND (
+    $2::TEXT IS NULL 
+    OR $2::TEXT = '' 
+    OR store.provider_id ILIKE '%' || $2::TEXT || '%'
+)
+AND (
+    $3::TEXT IS NULL 
+    OR $3::TEXT = '' 
+    OR store.file_name ILIKE '%' || $3::TEXT || '%'
+    OR store.file_mime_type ILIKE '%s' || $3::TEXT || '%'
+    OR store.file_extension ILIKE '%s' || $3::TEXT || '%'
+)
+`
+
+type GetSynchedFilesParams struct {
+	UserID   pgtype.UUID
+	Provider string
+	Search   string
+}
+
+type GetSynchedFilesRow struct {
+	FileName          string
+	FileSize          int32
+	Provider          string
+	FileCreatedTime   pgtype.Text
+	FileModifiedTime  pgtype.Text
+	FileThumbnailLink pgtype.Text
+}
+
+func (q *Queries) GetSynchedFiles(ctx context.Context, arg GetSynchedFilesParams) ([]GetSynchedFilesRow, error) {
+	rows, err := q.db.Query(ctx, getSynchedFiles, arg.UserID, arg.Provider, arg.Search)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSynchedFilesRow
+	for rows.Next() {
+		var i GetSynchedFilesRow
+		if err := rows.Scan(
+			&i.FileName,
+			&i.FileSize,
+			&i.Provider,
+			&i.FileCreatedTime,
+			&i.FileModifiedTime,
+			&i.FileThumbnailLink,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one

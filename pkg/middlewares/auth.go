@@ -74,7 +74,7 @@ func (m *AuthMiddleware) VerifyAccessToken(next http.Handler) http.Handler {
 			Valid: true,
 		}
 
-		// For assume any type of error means no user exists
+		// For now assume any type of error means no user exists
 		if err := m.checkUserExists(userId); err != nil {
 			utils.SendAPIErrorResponse(w, http.StatusUnauthorized, ErrNoUser)
 			return
@@ -128,7 +128,7 @@ func (m *AuthMiddleware) VerifyRefreshToken(next http.Handler) http.Handler {
 			Valid: true,
 		}
 
-		// For assume any type of error means no user exists
+		// For now assume any type of error means no user exists
 		if err := m.checkUserExists(userId); err != nil {
 			utils.SendAPIErrorResponse(w, http.StatusUnauthorized, ErrNoUser)
 			return

@@ -36,8 +36,8 @@ SELECT access_token, refresh_token FROM account WHERE user_id = $1 AND provider_
 -- name: AddCloudStoreFile :one
 INSERT INTO cloud_store (
   account_id, provider_id, provider_file_id, file_name, file_mime_type,
-  file_size, file_created_time, file_modified_time, file_thumbnail_link, file_extension
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (provider_file_id)
+  file_size, file_created_time, file_modified_time, file_thumbnail_link, file_extension) 
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (provider_file_id)
 DO UPDATE SET
   file_name = $4,
   file_mime_type = $5,
@@ -51,3 +51,30 @@ RETURNING id;
 
 -- name: GetLatestSynchedFile :one
 SELECT updated_at FROM cloud_store WHERE provider_id = $1 AND account_id = $2 ORDER BY updated_at DESC LIMIT 1;
+
+-- name: GetSynchedFiles :many
+SELECT 
+    store.file_name AS file_name, 
+    store.file_size AS file_size, 
+    store.provider_id AS provider,
+    store.file_created_time as file_created_time, 
+    store.file_modified_time as file_modified_time, 
+    store.file_thumbnail_link as file_thumbnail_link 
+FROM 
+    cloud_store store
+JOIN 
+    account ON store.account_id = account.id
+WHERE 
+    account.user_id = @user_id
+AND (
+    @provider::TEXT IS NULL 
+    OR @provider::TEXT = '' 
+    OR store.provider_id ILIKE '%' || @provider::TEXT || '%'
+)
+AND (
+    @search::TEXT IS NULL 
+    OR @search::TEXT = '' 
+    OR store.file_name ILIKE '%' || @search::TEXT || '%'
+    OR store.file_mime_type ILIKE '%s' || @search::TEXT || '%'
+    OR store.file_extension ILIKE '%s' || @search::TEXT || '%'
+);
