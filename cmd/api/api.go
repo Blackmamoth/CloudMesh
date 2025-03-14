@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/blackmamoth/cloudmesh/pkg/config"
+	"github.com/blackmamoth/cloudmesh/pkg/handlers"
 	"github.com/blackmamoth/cloudmesh/pkg/middlewares"
 	"github.com/blackmamoth/cloudmesh/pkg/utils"
 	"github.com/go-chi/chi/v5"
@@ -50,6 +51,8 @@ func (s *APIServer) Run() error {
 		)
 	})
 
+	r.Mount("/v1/api", s.registerRoutes())
+
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		utils.SendAPIErrorResponse(
 			w,
@@ -73,4 +76,18 @@ func (s *APIServer) Run() error {
 	)
 
 	return http.ListenAndServe(fmt.Sprintf("%s:%s", s.host, s.addr), r)
+}
+
+func (s *APIServer) registerRoutes() *chi.Mux {
+	r := chi.NewRouter()
+
+	authMiddleware := middlewares.NewAuthMiddleware(s.poolConfig)
+
+	authHandler := handlers.NewAuthHandler(authMiddleware, s.poolConfig)
+	cloudStoreHandler := handlers.NewCloudStoreHandler(authMiddleware, s.poolConfig)
+
+	r.Mount("/auth", authHandler.RegisterRoutes())
+	r.Mount("/cloud-store", cloudStoreHandler.RegisterRoutes())
+
+	return r
 }

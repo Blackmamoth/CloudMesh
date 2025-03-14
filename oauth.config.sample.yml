@@ -1,0 +1,21 @@
+google:
+  client_id:
+  client_secret:
+  callback_url: http://localhost:8080/v1/api/auth/google/callback 
+  scopes:
+    - https://www.googleapis.com/auth/userinfo.email
+    - https://www.googleapis.com/auth/userinfo.profile
+    - openid
+    - https://www.googleapis.com/auth/drive
+    - https://www.googleapis.com/auth/drive.file
+    - https://www.googleapis.com/auth/drive.metadata.readonly
+      
+dropbox:
+  client_id:
+  client_secret:
+  callback_url: http://localhost:8080/v1/api/auth/dropbox/callback
+  scopes:
+    - files.metadata.read
+    - files.content.write
+    - files.content.read
+    - file_requests.read

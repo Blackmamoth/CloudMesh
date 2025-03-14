@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     container_name: cloudmesh_backend
-    restart: "on-failure"
+    restart: always
     ports:
       - 8080:8080
     env_file:
@@ -26,7 +26,7 @@ services:
 
   db:
     image: postgres:16-alpine
-    restart: "on-failure"
+    restart: always
     container_name: cloudmesh_database
     env_file:
       - .env
@@ -38,3 +38,5 @@ services:
       timeout: 30s
       retries: 5
       start_period: 30s
+    volumes:
+      - ${PWD}/pgdata:/var/lib/postgresql/data
