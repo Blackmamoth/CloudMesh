@@ -1,10 +1,10 @@
-name: Staging CI
+name: Main CI
 
 on:
     push:
-        branches: stag
+        branches: main
     pull_request: 
-        branches: stag
+        branches: main
         types: closed
 
 jobs:
@@ -28,4 +28,4 @@ jobs:
               with:
                 context: .
                 push: true
-                tags: ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:stag-${{ github.sha }}, ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:stag-latest
+                tags: ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:main-${{ github.sha }}, ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:latest
