@@ -11,6 +11,7 @@ import (
 	"github.com/blackmamoth/cloudmesh/pkg/utils"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -41,11 +42,17 @@ func (s *APIServer) Run() error {
 	r.Use(middleware.Heartbeat("/ping"))
 	r.Use(middleware.Compress(5, "gzip"))
 
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{config.AppConfig.FRONTEND_HOST},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		utils.SendAPIResponse(
 			w,
 			http.StatusOK,
-			map[string]interface{}{
+			map[string]string{
 				"message": "Welcome to CloudMesh! Your gateway to effortlessly connecting and managing your cloud storage. Let's get started!",
 			},
 		)

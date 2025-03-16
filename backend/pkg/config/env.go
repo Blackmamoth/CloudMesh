@@ -10,9 +10,10 @@ import (
 )
 
 type AppConfiguration struct {
-	ENVIRONMENT string `envconfig:"ENVIRONMENT" required:"true"`
-	HOST        string `envconfig:"HOST"        required:"true"`
-	PORT        string `envconfig:"PORT"        required:"true"`
+	ENVIRONMENT   string `envconfig:"ENVIRONMENT"   required:"true"`
+	HOST          string `envconfig:"HOST"          required:"true"`
+	PORT          string `envconfig:"PORT"          required:"true"`
+	FRONTEND_HOST string `envconfig:"FRONTEND_HOST" required:"true"`
 }
 
 type PostgreConfiguration struct {
