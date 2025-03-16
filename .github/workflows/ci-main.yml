@@ -29,6 +29,7 @@ jobs:
             - name: Build and Push
               uses: docker/build-push-action@v6
               with:
-                context: .
+                context: ./backend
                 push: true
+                file: ./backend/Dockerfile
                 tags: ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:main-${{ github.sha }}, ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:latest
