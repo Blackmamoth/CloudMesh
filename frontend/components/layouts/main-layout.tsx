@@ -104,16 +104,16 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                     src="/placeholder.svg?height=32&width=32"
                     alt="User avatar"
                   />
-                  <AvatarFallback>AJ</AvatarFallback>
+                  <AvatarFallback>AV</AvatarFallback>
                 </Avatar>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <div className="flex items-center gap-2 p-2">
                 <div className="flex flex-col space-y-0.5">
-                  <span className="text-sm font-medium">Alex Johnson</span>
+                  <span className="text-sm font-medium">Ashpak Veetar</span>
                   <span className="text-xs text-muted-foreground">
-                    alex@example.com
+                    ashpakv88@gmail.com
                   </span>
                 </div>
               </div>

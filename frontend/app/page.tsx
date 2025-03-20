@@ -17,6 +17,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 import { FaDropbox, FaGoogleDrive } from "react-icons/fa6";
+import { IconType } from "react-icons/lib";
 // import { GoogleDriveIcon, DropboxIcon } from "@/components/icons";
 
 export default function LandingPage() {
@@ -128,22 +129,22 @@ export default function LandingPage() {
 
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <FeatureCard
-                icon={<FolderIcon className="h-10 w-10" />}
+                Icon={FolderIcon}
                 title="Unified Access"
                 description="Browse and manage all your cloud files in a single, intuitive interface"
               />
               <FeatureCard
-                icon={<ArrowRightIcon className="h-10 w-10" />}
+                Icon={ArrowRightIcon}
                 title="Easy Transfers"
                 description="Move or copy files between cloud providers with just a few clicks"
               />
               <FeatureCard
-                icon={<RefreshCwIcon className="h-10 w-10" />}
+                Icon={RefreshCwIcon}
                 title="No Local Storage Required"
                 description="Work with your files without downloading them to your device"
               />
               <FeatureCard
-                icon={<ShieldCheckIcon className="h-10 w-10" />}
+                Icon={ShieldCheckIcon}
                 title="Secure Authentication"
                 description="Industry-standard OAuth ensures your credentials are never exposed"
               />
@@ -345,18 +346,20 @@ export default function LandingPage() {
 }
 
 function FeatureCard({
-  icon,
+  Icon,
   title,
   description,
 }: {
-  icon: any;
+  Icon: IconType;
   title: string;
   description: string;
 }) {
   return (
     <div className="group relative overflow-hidden rounded-lg border bg-background p-6 hover:shadow-md transition-all duration-300 hover:-translate-y-1">
       <div className="space-y-2">
-        <div className="text-primary">{icon}</div>
+        <div className="text-primary">
+          <Icon className="h-20 w-20" />
+        </div>
         <h3 className="font-bold">{title}</h3>
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>

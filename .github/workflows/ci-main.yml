@@ -32,4 +32,4 @@ jobs:
                 context: ./backend
                 push: true
                 file: ./backend/Dockerfile
-                tags: ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:main-${{ github.sha }}, ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:latest
+                tags: ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:${{ github.sha }}, ${{ secrets.DOCKERHUB_USERNAME }}/cloudmesh_backend:latest

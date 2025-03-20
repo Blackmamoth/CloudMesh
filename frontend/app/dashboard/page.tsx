@@ -17,7 +17,8 @@ import {
   UploadIcon,
 } from "@/components/icons";
 import { MainLayout } from "@/components/layouts/main-layout";
-import { FaDropbox, FaGoogle } from "react-icons/fa6";
+import { FaDropbox, FaGoogleDrive } from "react-icons/fa6";
+import { IconType } from "react-icons/lib";
 
 export default function DashboardPage() {
   return (
@@ -25,7 +26,7 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-6">
         <section>
           <h1 className="text-3xl font-bold tracking-tight mb-2">
-            Welcome back, Alex
+            Welcome back, Ashpak Veetar
           </h1>
           <p className="text-muted-foreground">
             {"Here's an overview of your cloud storage"}
@@ -39,14 +40,14 @@ export default function DashboardPage() {
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <StorageCard
               provider="Google Drive"
-              icon={<FaGoogle className="h-8 w-8" />}
+              Icon={FaGoogleDrive}
               used={15.4}
               total={30}
               color="#4285F4"
             />
             <StorageCard
               provider="Dropbox"
-              icon={<FaDropbox className="h-8 w-8" />}
+              Icon={FaDropbox}
               used={8.2}
               total={20}
               color="#0061FF"
@@ -95,38 +96,38 @@ export default function DashboardPage() {
                     <tbody>
                       <RecentFileRow
                         name="Project Proposal.docx"
-                        icon={<FileIcon className="h-4 w-4" />}
+                        Icon={FileIcon}
                         size="2.4 MB"
                         modified="Today, 2:30 PM"
-                        provider={<FaGoogle className="h-4 w-4" />}
+                        Provider={FaGoogleDrive}
                       />
                       <RecentFileRow
                         name="Financial Report.xlsx"
-                        icon={<FileIcon className="h-4 w-4" />}
+                        Icon={FileIcon}
                         size="4.8 MB"
                         modified="Yesterday"
-                        provider={<FaDropbox className="h-4 w-4" />}
+                        Provider={FaDropbox}
                       />
                       <RecentFileRow
                         name="Marketing Assets"
-                        icon={<FolderIcon className="h-4 w-4" />}
+                        Icon={FolderIcon}
                         size="128 MB"
                         modified="Aug 12, 2023"
-                        provider={<FaGoogle className="h-4 w-4" />}
+                        Provider={FaGoogleDrive}
                       />
                       <RecentFileRow
                         name="Presentation.pptx"
-                        icon={<FileIcon className="h-4 w-4" />}
+                        Icon={FileIcon}
                         size="8.2 MB"
                         modified="Aug 10, 2023"
-                        provider={<FaDropbox className="h-4 w-4" />}
+                        Provider={FaDropbox}
                       />
                       <RecentFileRow
                         name="Product Photos"
-                        icon={<FolderIcon className="h-4 w-4" />}
+                        Icon={FolderIcon}
                         size="1.2 GB"
                         modified="Aug 5, 2023"
-                        provider={<FaGoogle className="h-4 w-4" />}
+                        Provider={FaGoogleDrive}
                       />
                     </tbody>
                   </table>
@@ -169,7 +170,19 @@ export default function DashboardPage() {
   );
 }
 
-function StorageCard({ provider, icon, used, total, color }) {
+function StorageCard({
+  provider,
+  Icon,
+  used,
+  total,
+  color,
+}: {
+  provider: string;
+  Icon: IconType;
+  used: number;
+  total: number;
+  color: string;
+}) {
   const percentage = (used / total) * 100;
 
   return (
@@ -177,7 +190,7 @@ function StorageCard({ provider, icon, used, total, color }) {
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg">{provider}</CardTitle>
-          {icon}
+          <Icon className="h-6 w-6" />
         </div>
         <CardDescription>Storage usage</CardDescription>
       </CardHeader>
@@ -229,18 +242,32 @@ function StorageCard({ provider, icon, used, total, color }) {
   );
 }
 
-function RecentFileRow({ name, icon, size, modified, provider }) {
+function RecentFileRow({
+  name,
+  Icon,
+  size,
+  modified,
+  Provider,
+}: {
+  name: string;
+  Icon: IconType;
+  size: string;
+  modified: string;
+  Provider: IconType;
+}) {
   return (
     <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
       <td className="p-4 align-middle">
         <div className="flex items-center gap-2">
-          {icon}
+          <Icon className="h-6 w-6" />
           <span>{name}</span>
         </div>
       </td>
       <td className="p-4 align-middle">{size}</td>
       <td className="p-4 align-middle">{modified}</td>
-      <td className="p-4 align-middle">{provider}</td>
+      <td className="p-4 align-middle">
+        <Provider className="h-6 w-6" />
+      </td>
       <td className="p-4 align-middle">
         <div className="flex gap-2">
           <Button variant="ghost" size="icon" className="h-8 w-8">
