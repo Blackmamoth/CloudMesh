@@ -32,8 +32,6 @@ COPY ./entrypoint.sh .
 
 COPY ./setup_oauth_config.sh .
 
-RUN mkdir -p sqlc/migrations
-
 COPY ./sqlc/migrations/ sqlc/migrations
 
 RUN chmod +x ./entrypoint.sh
