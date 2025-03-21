@@ -49,5 +49,4 @@ done
 # Move the temp file to the output location
 mv "$temp_file" "$output_file"
 
-echo "Successfully processed $input_file and saved to $output_file"
 exit 0
