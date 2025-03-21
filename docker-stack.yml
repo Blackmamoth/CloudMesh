@@ -1,6 +1,6 @@
 services:
   backend:
-    image: cloudmesh_backend:latest
+    image: cloudmesh_backend:{GIT_COMMIT_HASH:-latest}
     deploy:
       mode: replicated
       replicas: 3
