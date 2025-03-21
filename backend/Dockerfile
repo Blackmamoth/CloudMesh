@@ -16,6 +16,12 @@ RUN apk update
 
 RUN apk add --no-cache make
 
+RUN wget https://github.com/pressly/goose/releases/download/v3.24.1/goose_linux_x86_64 -O goose
+
+RUN chmod +x goose
+
+RUN mv goose /usr/local/bin/goose
+
 COPY --from=build /src/bin/cloudmesh /bin/cloudmesh
 
 COPY ./makefile .
