@@ -56,3 +56,4 @@ jobs:
             host: ${{ secrets.REMOTE_HOST }}
             ssh_key: ${{ secrets.REMOTE_SSH_KEY }}
             env_file: .env
+            detach: true
