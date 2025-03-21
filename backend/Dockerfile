@@ -12,6 +12,10 @@ RUN go build -o bin/cloudmesh cmd/main.go
 
 FROM alpine:3.21
 
+RUN apk update
+
+RUN apk add --no-cache make
+
 COPY --from=build /src/bin/cloudmesh /bin/cloudmesh
 
 COPY ./oauth.config.sample.yml .

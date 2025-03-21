@@ -12,4 +12,6 @@ done
 
 sh ./setup_oauth_config.sh oauth.config.sample.yml oauth.config.yml
 
+make migration-up
+
 exec /bin/cloudmesh
