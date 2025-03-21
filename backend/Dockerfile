@@ -10,10 +10,20 @@ COPY . .
 
 RUN go build -o bin/cloudmesh cmd/main.go
 
-FROM scratch
+FROM alpine:3.21
 
 COPY --from=build /src/bin/cloudmesh /bin/cloudmesh
 
+COPY ./oauth.config.sample.yml .
+
+COPY ./entrypoint.sh .
+
+COPY ./setup_oauth_config.sh .
+
+RUN chmod +x ./entrypoint.sh
+
+RUN chmod +x ./setup_oauth_config.sh
+
 EXPOSE 8080
 
-CMD ["/bin/cloudmesh"]
+ENTRYPOINT ["./entrypoint.sh"]

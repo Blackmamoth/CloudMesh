@@ -1,0 +1,4 @@
+export const AppConfig = {
+  BACKEND_API_URL: process.env.NEXT_PUBLIC_BACKEND_API_URL,
+  BACKEND_API_VERSION: process.env.NEXT_PUBLIC_BACKEND_API_VERSION,
+};

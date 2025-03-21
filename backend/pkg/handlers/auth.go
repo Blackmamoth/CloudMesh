@@ -108,11 +108,8 @@ func (h *AuthHandler) auth(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 
 	if !slices.Contains(config.OAuthConfig.SUPPORTED_PROVIDERS, provider) {
-		utils.SendAPIErrorResponse(
-			w,
-			http.StatusInternalServerError,
-			fmt.Errorf("invalid provider"),
-		)
+		config.LOGGER.Error("invalid provider selected", zap.String("provider", provider))
+		errorRedirect(w, r)
 		return
 	}
 
@@ -123,13 +120,11 @@ func (h *AuthHandler) auth(w http.ResponseWriter, r *http.Request) {
 
 	r = r.WithContext(context.WithValue(r.Context(), "provider", provider))
 
-	user, err := gothic.CompleteUserAuth(w, r)
+	_, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
 		gothic.BeginAuthHandler(w, r)
 		return
 	}
-
-	utils.SendAPIErrorResponse(w, http.StatusOK, user)
 }
 
 func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +133,7 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 	conn, err := utils.GetNewConnectionFromPool(context.Background(), h.poolConfig)
 	if err != nil {
 		config.LOGGER.Error("could not get new connection from pool", zap.Error(err))
-		utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+		errorRedirect(w, r)
 		return
 	}
 	defer conn.Release()
@@ -150,12 +145,17 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 	if provider == "dropbox" {
 		dropboxResponse, err := handleDropboxAuthCallbaack(r)
 		if err != nil {
-			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+			config.LOGGER.Error("dropbox auth callback failed", zap.Error(err))
+			errorRedirect(w, r)
 			return
 		}
 		currentAccountResponse, err := getDropboxCurrentAccount(dropboxResponse.AccessToken)
 		if err != nil {
-			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+			config.LOGGER.Error(
+				"error occured while fetching current dropbox account",
+				zap.Error(err),
+			)
+			errorRedirect(w, r)
 			return
 		}
 
@@ -169,7 +169,8 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 	} else {
 		user, err = gothic.CompleteUserAuth(w, r)
 		if err != nil {
-			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+			config.LOGGER.Error("gothic user auth failed", zap.Error(err))
+			errorRedirect(w, r)
 			return
 		}
 	}
@@ -180,14 +181,16 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil && errors.Is(err, sql.ErrNoRows) {
 		newUser, err := createNewUser(conn, user)
 		if err != nil {
-			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+			config.LOGGER.Error("new user creation failed", zap.Error(err))
+			errorRedirect(w, r)
 			return
 		}
 
 		userId = newUser.ID
 		_, err = createNewAccount(conn, user, userId)
 		if err != nil {
-			utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+			config.LOGGER.Error("new account creation failed", zap.Error(err))
+			errorRedirect(w, r)
 			return
 		}
 	} else {
@@ -200,30 +203,31 @@ func (h *AuthHandler) authCallback(w http.ResponseWriter, r *http.Request) {
 		if err != nil && errors.Is(err, sql.ErrNoRows) {
 			_, err = createNewAccount(conn, user, userId)
 			if err != nil {
-				utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+				config.LOGGER.Error("new account creation failed", zap.Error(err))
+				errorRedirect(w, r)
 				return
 			}
 		} else {
 			err = updateAccount(conn, user, userId, account.ID)
 			if err != nil {
-				utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+				config.LOGGER.Error("update account operation failed", zap.Error(err))
+				errorRedirect(w, r)
 				return
 			}
 		}
 	}
 
 	if err := handleAuthTokenCookies(w, userId); err != nil {
-
-		utils.SendAPIErrorResponse(w, http.StatusInternalServerError, err)
+		config.LOGGER.Error("auth token cookies operation failed", zap.Error(err))
+		errorRedirect(w, r)
 		return
 	}
 
-	utils.SendAPIResponse(
+	http.Redirect(
 		w,
-		http.StatusOK,
-		map[string]interface{}{
-			"user": user,
-		},
+		r,
+		fmt.Sprintf("%s/dashboard", config.AppConfig.FRONTEND_HOST),
+		http.StatusFound,
 	)
 }
 
@@ -256,7 +260,6 @@ func handleDropboxAuthCallbaack(
 		bytes.NewBufferString(data.Encode()),
 	)
 	if err != nil {
-		config.LOGGER.Error("could not generate new http request", zap.Error(err))
 		return nil, err
 	}
 
@@ -265,7 +268,6 @@ func handleDropboxAuthCallbaack(
 
 	res, err := httpClient.Do(req)
 	if err != nil {
-		config.LOGGER.Error("dropbox oauth request failed", zap.Error(err))
 		return nil, err
 	}
 
@@ -273,7 +275,6 @@ func handleDropboxAuthCallbaack(
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		config.LOGGER.Error("error reading dropbox oauth response body", zap.Error(err))
 		return nil, err
 	}
 
@@ -291,10 +292,6 @@ func getDropboxCurrentAccount(
 
 	req, err := http.NewRequest(http.MethodPost, DROPBOX_CURRENT_ACCOUNT_API, nil)
 	if err != nil {
-		config.LOGGER.Error(
-			"could not generate new dropbox current_account request",
-			zap.Error(err),
-		)
 		return nil, err
 	}
 
@@ -303,7 +300,6 @@ func getDropboxCurrentAccount(
 
 	res, err := httpClient.Do(req)
 	if err != nil {
-		config.LOGGER.Error("dropbox current_account request failed", zap.Error(err))
 		return nil, err
 	}
 
@@ -311,7 +307,6 @@ func getDropboxCurrentAccount(
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		config.LOGGER.Error("could not read dropbox current_account response body", zap.Error(err))
 		return nil, err
 	}
 
@@ -358,7 +353,6 @@ func createNewUser(conn *pgxpool.Conn, user goth.User) (*repository.User, error)
 
 		createdUser, err := qtx.CreateUser(context.Background(), newUserParams)
 		if err != nil {
-			config.LOGGER.Error("sql transaction failed while creating new user", zap.Error(err))
 			return err
 		}
 
@@ -407,7 +401,6 @@ func createNewAccount(
 
 		createdAccount, err := qtx.CreateAccount(context.Background(), newAccountParams)
 		if err != nil {
-			config.LOGGER.Error("sql transaction failed while creating new account", zap.Error(err))
 			return err
 		}
 
@@ -454,21 +447,19 @@ func updateAccount(
 		return qtx.UpdateAccountDetails(context.Background(), updateAccountParams)
 	})
 	if err != nil {
-		config.LOGGER.Error("sql transaction failed while updating account details", zap.Error(err))
+		return err
 	}
-	return err
+	return nil
 }
 
 func generateAuthTokens(userId pgtype.UUID) (string, string, error) {
 	accessToken, err := utils.SignJWTToken(userId.String(), utils.ACCESS_TOKEN)
 	if err != nil {
-		config.LOGGER.Error("could not generate access token", zap.Error(err))
 		return "", "", err
 	}
 
 	refreshToken, err := utils.SignJWTToken(userId.String(), utils.REFRESH_TOKEN)
 	if err != nil {
-		config.LOGGER.Error("could not generate refresh token", zap.Error(err))
 		return "", "", err
 	}
 	return accessToken, refreshToken, nil
@@ -504,8 +495,11 @@ func getUserDetails(
 	return &user, err
 }
 
-func errorRedirect(w http.ResponseWriter, r *http.Request, msg string, err error) {
-	defer config.LOGGER.Sync()
-	config.LOGGER.Error(msg, zap.Error(err))
-	http.Redirect(w, r, "http://localhost:3000/error", http.StatusSeeOther)
+func errorRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(
+		w,
+		r,
+		fmt.Sprintf("%s/error", config.AppConfig.FRONTEND_HOST),
+		http.StatusFound,
+	)
 }

@@ -1,0 +1,134 @@
+services:
+  backend:
+    image: cloudmesh_backend:latest
+    deploy:
+      mode: replicated
+      replicas: 3
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256M"
+        reservations:
+          cpus: "0.1"
+          memory: "64M"
+      update_config:
+        order: start-first
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 30s
+        max_failure_ratio: 0.3
+      rollback_config:
+        order: start-first
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        monitor: 30s
+        max_failure_ratio: 0.3
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 5
+        window: 60s 
+    networks:
+        - cloudmesh
+    dns:
+      - 1.1.1.1
+    ports:
+        - 8080:8080
+    environment:
+      HOST: 0.0.0.0
+      POSTGRES_HOST: cloudmesh_db
+      FRONTEND_HOST: http://localhost:3000
+    secrets:
+      - ENVIRONMENT
+      - SESSION_SECRET
+      - POSTGRES_PORT
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+      - POSTGRES_SSLMODE
+      - ACCESS_TOKEN_SECRET
+      - REFRESH_TOKEN_SECRET
+      - ACCESS_TOKEN_EXPIRATION_IN_HOURS
+      - REFRESH_TOKEN_EXPIRATION_IN_DAYS
+      - GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET
+      - DROPBOX_CLIENT_ID
+      - DROPBOX_CLIENT_SECRET
+    # healthcheck:
+    #   test: "wget --no-verbose --spider http://localhost:8080 || exit 1"
+    #   interval: 1m
+    #   timeout: 30s
+    #   retries: 5
+    #   start_period: 30s
+    depends_on:
+      - cloudmesh_db
+
+  db:
+    image: postgres:16-alpine
+    deploy:
+      mode: replicated
+      replicas: 1
+    secrets:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+    environment:
+        POSTGRES_USER_FILE: /run/secrets/POSTGRES_USER
+        POSTGRES_PASSWORD_FILE: /run/secrets/POSTGRES_PASSWORD
+        POSTGRES_DB_FILE: /run/secrets/POSTGRES_DB
+    ports:
+      - 5432:5432
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U cloudmesh" ]
+      interval: 1m
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - cloudmesh_db:/var/lib/postgresql/data
+    networks:
+        - cloudmesh
+
+networks:
+  cloudmesh:
+    external: true
+
+volumes:
+  cloudmesh_db:
+    external: true
+
+secrets:
+  ENVIRONMENT:
+    external: true
+  SESSION_SECRET:
+    external: true
+  POSTGRES_PORT:
+    external: true
+  POSTGRES_USER:
+    external: true
+  POSTGRES_PASSWORD:
+    external: true
+  POSTGRES_DB:
+    external: true
+  POSTGRES_SSLMODE:
+    external: true
+  ACCESS_TOKEN_SECRET:
+    external: true
+  REFRESH_TOKEN_SECRET:
+    external: true
+  ACCESS_TOKEN_EXPIRATION_IN_HOURS:
+    external: true
+  REFRESH_TOKEN_EXPIRATION_IN_DAYS:
+    external: true
+  GOOGLE_CLIENT_ID:
+    external: true
+  GOOGLE_CLIENT_SECRET:
+    external: true
+  DROPBOX_CLIENT_ID:
+    external: true
+  DROPBOX_CLIENT_SECRET:
+    external: true
+
+## SETUP SECRETS!!!!!

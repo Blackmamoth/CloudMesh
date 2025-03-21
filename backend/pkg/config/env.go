@@ -10,17 +10,18 @@ import (
 )
 
 type AppConfiguration struct {
-	ENVIRONMENT string `envconfig:"ENVIRONMENT" required:"true"`
-	HOST        string `envconfig:"HOST"        required:"true"`
-	PORT        string `envconfig:"PORT"        required:"true"`
+	ENVIRONMENT   string `envconfig:"ENVIRONMENT"   required:"true"`
+	HOST          string `envconfig:"HOST"                          default:"127.0.0.1"`
+	PORT          string `envconfig:"PORT"                          default:"8080"`
+	FRONTEND_HOST string `envconfig:"FRONTEND_HOST" required:"true"`
 }
 
 type PostgreConfiguration struct {
 	POSTGRES_HOST    string `envconfig:"POSTGRES_HOST"     required:"true"`
-	POSTGRES_PORT    string `envconfig:"POSTGRES_PORT"     required:"true"`
-	POSTGRES_USER    string `envconfig:"POSTGRES_USER"     required:"true"`
+	POSTGRES_PORT    string `envconfig:"POSTGRES_PORT"                          default:"5432"`
+	POSTGRES_USER    string `envconfig:"POSTGRES_USER"                          default:"cloudmesh"`
 	POSTGRES_PASS    string `envconfig:"POSTGRES_PASSWORD" required:"true"`
-	POSTGRES_DBNAME  string `envconfig:"POSTGRES_DB"       required:"true"`
+	POSTGRES_DBNAME  string `envconfig:"POSTGRES_DB"       required:"cloudmesh"`
 	POSTGRES_SSLMODE string `envconfig:"POSTGRES_SSLMODE"  required:"true"`
 }
 
