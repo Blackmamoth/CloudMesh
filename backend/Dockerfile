@@ -18,6 +18,8 @@ RUN apk add --no-cache make
 
 COPY --from=build /src/bin/cloudmesh /bin/cloudmesh
 
+COPY ./makefile .
+
 COPY ./oauth.config.sample.yml .
 
 COPY ./entrypoint.sh .
